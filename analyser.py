@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """
-Clash Royale Personal Performance Analyzer — SQLite edition
 
 Usage:
     python3 analyser.py "#822JCG2YL"
     python3 analyser.py "#822JCG2YL" --last 15
     python3 analyser.py "#822JCG2YL" --no-fetch
 
-Configuration is loaded from a .env file in the working directory.
+Configuration is loaded from .env.
 
 Environment variables:
-    CR_API_TOKEN      Required Clash Royale API token
+    CR_API_TOKEN      Required when fetching from the API
     CR_API_BASE_URL   Optional; defaults to https://proxy.royaleapi.dev/v1
     CR_SQLITE_DB      Optional; defaults to ./clash_royale.db
 
 Database identity:
     opponent_tag is the unique battle identifier within each player dataset.
     battle_id is only the sequential SQLite row ID.
+
+    player_deck_info / opponent_deck_info preserve API card order and
+    record active Evolution/Hero status. evolutionLevel is not used.
 
 Only gameMode.name == "Ladder" is stored.
 
@@ -73,6 +75,10 @@ RARITY_OFFSETS = {
     "champion": 10,
 }
 
+DEFAULT_API_BASE_URL = "https://proxy.royaleapi.dev/v1"
+DEFAULT_DB_PATH = os.path.join(os.getcwd(), "clash_royale.db")
+
+
 BANDS = (
     "< -3",
     "-3 to -1",
@@ -82,6 +88,7 @@ BANDS = (
     "> +6",
 )
 
+# Current database schema. Keep this aligned with the production SQLite database.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS battles (
     battle_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,6 +103,8 @@ CREATE TABLE IF NOT EXISTS battles (
 
     player_deck_vector TEXT NOT NULL,
     opponent_deck_vector TEXT NOT NULL,
+    player_deck_info TEXT NOT NULL,
+    opponent_deck_info TEXT NOT NULL,
     LH_difference TEXT NOT NULL,
 
     player_ADSI REAL NOT NULL,
@@ -128,6 +137,21 @@ ON battles(player_tag, battle_id ASC);
 """
 
 
+def get_db_path() -> str:
+    """Return the SQLite path configured through CR_SQLITE_DB."""
+    return os.getenv("CR_SQLITE_DB", DEFAULT_DB_PATH)
+
+
+def get_api_config() -> tuple[str, str]:
+    """Return the API token and base URL from the environment."""
+    token = os.getenv("CR_API_TOKEN")
+    if not token:
+        raise RuntimeError("CR_API_TOKEN environment variable is not set.")
+
+    base_url = os.getenv("CR_API_BASE_URL", DEFAULT_API_BASE_URL)
+    return token, base_url
+
+
 def normalize_tag(tag: str) -> str:
     tag = tag.strip().upper()
     if not tag.startswith("#"):
@@ -150,34 +174,64 @@ def normalize_level(card: dict[str, Any]) -> int:
 
 def extract_deck(
     side: dict[str, Any],
-) -> tuple[list[str], list[int], list[int], list[bool]]:
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """
+    Extract an 8-card battle deck while preserving API card order.
+
+    Special-form slots:
+        cards[0] -> Evolution slot
+        cards[1] -> Hero slot
+        cards[2] -> Hybrid slot (Evolution preferred)
+        cards[3:8] -> normal slots
+
+    Capability is determined from iconUrls:
+        evolutionMedium -> Evolution available
+        heroMedium      -> Hero available
+
+    evolutionLevel is deliberately not used.
+    """
     cards = side.get("cards") or []
 
     if len(cards) != 8:
         raise ValueError(f"Expected exactly 8 cards, got {len(cards)}")
 
-    rows = []
+    deck_info = []
 
-    for card in cards:
-        rows.append(
+    for index, card in enumerate(cards):
+        icon_urls = card.get("iconUrls") or {}
+
+        has_evolution = bool(icon_urls.get("evolutionMedium"))
+        has_hero = bool(icon_urls.get("heroMedium"))
+
+        evolution_active = False
+        hero_active = False
+
+        if index == 0:
+            evolution_active = has_evolution
+        elif index == 1:
+            hero_active = has_hero
+        elif index == 2:
+            if has_evolution:
+                evolution_active = True
+            elif has_hero:
+                hero_active = True
+
+        deck_info.append(
             {
+                "slot": index + 1,
                 "name": str(card["name"]),
                 "level": normalize_level(card),
-                "evolution": int(card.get("evolutionLevel", 0) or 0),
-                "hero": bool(
-                    (card.get("iconUrls") or {}).get("heroMedium")
-                ),
+                "has_evolution": has_evolution,
+                "has_hero": has_hero,
+                "evolution_active": evolution_active,
+                "hero_active": hero_active,
             }
         )
 
-    rows.sort(key=lambda r: (r["level"], r["name"]))
+    # Numerical vectors remain separate and are sorted for ADSI/LH.
+    levels = [item["level"] for item in deck_info]
 
-    return (
-        [r["name"] for r in rows],
-        [r["level"] for r in rows],
-        [r["evolution"] for r in rows],
-        [r["hero"] for r in rows],
-    )
+    return levels, deck_info
 
 
 def calculate_adsi(levels: list[int]) -> float:
@@ -319,11 +373,11 @@ def battle_to_record(
     if not opponent_tag:
         return None
 
-    _, p_levels, _, _ = extract_deck(player)
-    _, o_levels, _, _ = extract_deck(enemy)
+    player_levels, player_deck_info = extract_deck(player)
+    opponent_levels, opponent_deck_info = extract_deck(enemy)
 
-    player_deck_vector = sorted(p_levels)
-    opponent_deck_vector = sorted(o_levels)
+    player_deck_vector = sorted(player_levels)
+    opponent_deck_vector = sorted(opponent_levels)
 
     LH_difference = [
         opponent_deck_vector[i] - player_deck_vector[i]
@@ -351,6 +405,8 @@ def battle_to_record(
         "result": result,
         "player_deck_vector": player_deck_vector,
         "opponent_deck_vector": opponent_deck_vector,
+        "player_deck_info": player_deck_info,
+        "opponent_deck_info": opponent_deck_info,
         "LH_difference": LH_difference,
         "player_ADSI": player_adsi,
         "opponent_ADSI": opponent_adsi,
@@ -398,6 +454,8 @@ def archive_old_battles_table(conn: sqlite3.Connection) -> str | None:
         "player_ADSI",
         "opponent_ADSI",
         "ADSI_difference",
+        "player_deck_info",
+        "opponent_deck_info",
         "player_trophies",
     }
 
@@ -426,6 +484,7 @@ def archive_old_battles_table(conn: sqlite3.Connection) -> str | None:
 
 
 def connect_db(path: str) -> sqlite3.Connection:
+    """Open SQLite and ensure the current schema exists."""
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
 
@@ -436,9 +495,7 @@ def connect_db(path: str) -> sqlite3.Connection:
     archived = archive_old_battles_table(conn)
 
     if archived:
-        print(
-            f"Existing incompatible battles table archived as: {archived}"
-        )
+        print(f"Existing incompatible battles table archived as: {archived}")
 
     conn.executescript(SCHEMA)
     conn.commit()
@@ -476,6 +533,8 @@ def insert_records(
                 result,
                 player_deck_vector,
                 opponent_deck_vector,
+                player_deck_info,
+                opponent_deck_info,
                 LH_difference,
                 player_ADSI,
                 opponent_ADSI,
@@ -487,7 +546,7 @@ def insert_records(
                 LH_band,
                 player_trophies
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chronology_id,
@@ -501,6 +560,14 @@ def insert_records(
                 ),
                 json.dumps(
                     record["opponent_deck_vector"],
+                    separators=(",", ":"),
+                ),
+                json.dumps(
+                    record["player_deck_info"],
+                    separators=(",", ":"),
+                ),
+                json.dumps(
+                    record["opponent_deck_info"],
                     separators=(",", ":"),
                 ),
                 json.dumps(
@@ -533,6 +600,8 @@ def decode_row(row: sqlite3.Row) -> dict[str, Any]:
     for key in (
         "player_deck_vector",
         "opponent_deck_vector",
+        "player_deck_info",
+        "opponent_deck_info",
         "LH_difference",
     ):
         data[key] = json.loads(data[key])
@@ -692,28 +761,16 @@ def main() -> int:
 
     tag = normalize_tag(args.tag)
 
-    db_path = os.getenv(
-        "CR_SQLITE_DB",
-        os.path.join(os.getcwd(), "clash_royale.db"),
-    )
-
+    db_path = get_db_path()
     conn = connect_db(db_path)
 
     try:
         if not args.no_fetch:
-            token = os.getenv("CR_API_TOKEN")
-
-            if not token:
-                print(
-                    "ERROR: CR_API_TOKEN environment variable is not set.",
-                    file=sys.stderr,
-                )
+            try:
+                token, base_url = get_api_config()
+            except RuntimeError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
                 return 2
-
-            base_url = os.getenv(
-                "CR_API_BASE_URL",
-                "https://proxy.royaleapi.dev/v1",
-            )
 
             print(f"Fetching battlelog for {tag}...")
 

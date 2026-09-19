@@ -2,13 +2,7 @@
 
 A local **Clash Royale Ladder analysis system** that collects battle logs from the Clash Royale API, stores them in SQLite, calculates deck-strength and level-handicap metrics, and provides an interactive Streamlit dashboard.
 
-The project is designed for personal performance analysis rather than generic player ranking. It focuses on answering questions such as:
-
-- How strong is my deck relative to my opponents?
-- How much level pressure did I face?
-- How does Level Handicap (LH) relate to wins and losses?
-- How does my deck strength compare with my opponents?
-- How has my trophy count changed across recent matches?
+The project is designed for personal performance analysis, with an emphasis on comparing deck levels and battle outcomes.
 
 ---
 
@@ -20,7 +14,7 @@ The project is designed for personal performance analysis rather than generic pl
 - Processes **Ladder** battles only.
 - Ignores non-Ladder and incomplete/malformed battles.
 - Stores processed battles in SQLite.
-- Prevents duplicate opponent records using the database uniqueness constraint.
+- Prevents duplicate records using the database uniqueness constraint.
 - Supports analyzing the most recent 1–30 battles.
 
 ### Deck normalization
@@ -35,11 +29,50 @@ Card levels are converted into normalized displayed levels using rarity offsets:
 | Legendary | +8 |
 | Champion | +10 |
 
-The resulting eight card levels are sorted before the deck metrics are calculated.
+The numerical deck vectors are sorted before ADSI and LH calculations.
 
-### ADSI — Absolute Deck Strength Index
+The analyzer also preserves detailed deck information in the **original API card order**, including Evolution and Hero status.
 
-ADSI is an absolute deck-strength metric based on normalized card levels and their ordered positions in the deck.
+### Evolution and Hero tracking
+
+The current deck representation records:
+
+```text
+slot
+name
+level
+has_evolution
+has_hero
+evolution_active
+hero_active
+```
+
+Special slots are interpreted as:
+
+| API slot | Interpretation |
+|---|---|
+| 1 | Evolution slot |
+| 2 | Hero slot |
+| 3 | Hybrid slot — Evolution preferred, otherwise Hero |
+| 4–8 | Normal slots |
+
+Capability is determined from the API icon URLs:
+
+```text
+evolutionMedium → Evolution capability
+heroMedium      → Hero capability
+```
+
+`evolutionLevel` is deliberately not used.
+
+This produces two complementary representations:
+
+- **Deck vectors** — normalized, sorted numerical levels used by ADSI/LH.
+- **Deck info** — original API order with card and Evolution/Hero metadata.
+
+---
+
+## ADSI — Absolute Deck Strength Index
 
 For sorted normalized levels \(L_1,\ldots,L_8\):
 
@@ -55,18 +88,18 @@ w_i = \frac{i}{36}
 ADSI = 100\sum_{i=1}^{8}w_i x_i
 \]
 
-The system also records:
+The analyzer also records:
 
 \[
 ADSI_{difference} =
 ADSI_{opponent} - ADSI_{player}
 \]
 
-A positive ADSI difference therefore means the opponent's deck has a higher ADSI.
+A positive ADSI difference therefore indicates a higher opponent ADSI.
 
-### LH — Level Handicap
+---
 
-LH measures the level-pressure relationship between the player's deck and the opponent's deck.
+## LH — Level Handicap
 
 For sorted player levels \(y_i\) and opponent levels \(o_i\):
 
@@ -84,7 +117,7 @@ d, & d\leq2\\
 \end{cases}
 \]
 
-Opponent-card level multipliers are:
+Opponent-card level multipliers:
 
 | Opponent level | Weight |
 |---|---:|
@@ -108,7 +141,7 @@ H=\sum g(d_i)w(o_i) \quad \text{for }d_i>0
 S=g(o_8-y_8)w(o_8)
 \]
 
-and finally:
+and:
 
 \[
 LH=H-P+0.25S
@@ -116,48 +149,49 @@ LH=H-P+0.25S
 
 ### LH bands
 
-The dashboard and CLI classify LH into:
-
-| Band |
-|---|
-| `< -3` |
-| `-3 to -1` |
-| `-1 to +1` |
-| `+1 to +3` |
-| `+3 to +6` |
-| `> +6` |
+```text
+< -3
+-3 to -1
+-1 to +1
++1 to +3
++3 to +6
+> +6
+```
 
 ---
 
-## Project structure
+# Project structure
 
 ```text
-.
+clash_royale_analytics/
 ├── analyser.py
 ├── dashboard.py
-├── .env
+├── requirements.txt
 ├── .env.example
-├── clash_royale.db
-└── README.md
+├── .gitignore
+├── README.md
+├── LICENSE
+└── clash_royale.db
 ```
 
 ### `analyser.py`
 
-Command-line analyzer and API collector.
+The command-line collector and analyzer.
 
 It:
 
-1. Fetches the player's battle log.
+1. Fetches the battle log.
 2. Keeps Ladder battles.
-3. Normalizes card levels.
-4. Calculates ADSI.
-5. Calculates LH.
-6. Stores the result in SQLite.
-7. Prints a statistical summary.
+3. Extracts deck information.
+4. Normalizes card levels.
+5. Calculates ADSI.
+6. Calculates LH.
+7. Stores the battle in SQLite.
+8. Prints analysis statistics.
 
 ### `dashboard.py`
 
-Streamlit dashboard for exploring the stored battles.
+The Streamlit interface for exploring stored battles.
 
 It provides:
 
@@ -172,7 +206,7 @@ It provides:
 - ADSI difference vs. result
 - LH-band performance
 - Summary statistics
-- Battle-level records
+- Battle records
 
 The dashboard is read-only and does not modify the SQLite database.
 
@@ -180,14 +214,14 @@ The dashboard is read-only and does not modify the SQLite database.
 
 # Installation
 
-## 1. Clone the repository
+## Clone the repository
 
 ```bash
 git clone https://github.com/JournalKenobi11/clash_royale_analytics.git
-cd <your-repository-directory>
+cd clash_royale_analytics
 ```
 
-## 2. Create a virtual environment
+## Create a virtual environment
 
 Linux/macOS:
 
@@ -203,17 +237,17 @@ python -m venv .venv
 .venv\Scripts\activate
 ```
 
-## 3. Install dependencies
+## Install dependencies
 
 ```bash
-pip install requests python-dotenv pandas plotly streamlit
+pip install -r requirements.txt
 ```
 
 ---
 
 # Configuration
 
-Configuration is kept outside the Python source code in a `.env` file.
+Configuration is kept outside the Python source code in `.env`.
 
 Copy the example:
 
@@ -229,23 +263,17 @@ CR_API_BASE_URL=https://proxy.royaleapi.dev/v1
 CR_SQLITE_DB=./clash_royale.db
 ```
 
-### Environment variables
+The analyzer reads these values through centralized configuration helpers.
 
 | Variable | Required | Description |
 |---|---|---|
 | `CR_API_TOKEN` | Yes* | Clash Royale API token |
-| `CR_API_BASE_URL` | No | Clash Royale API base URL |
+| `CR_API_BASE_URL` | No | API base URL |
 | `CR_SQLITE_DB` | No | SQLite database path |
 
-\* `CR_API_TOKEN` is only required when running the analyzer without `--no-fetch`.
+\* Required only when fetching from the API.
 
-For example, to use a database stored elsewhere:
-
-```env
-CR_SQLITE_DB=/home/user/clash_api_dump/clash_royale.db
-```
-
-Both the analyzer and dashboard use this same variable, so they can operate on the same database.
+The analyzer and dashboard can therefore point to the same SQLite database without hardcoding a machine-specific path.
 
 ---
 
@@ -257,82 +285,59 @@ Both the analyzer and dashboard use this same variable, so they can operate on t
 python3 analyser.py "#822JCG2YL"
 ```
 
-The analyzer will:
+Default analysis window:
 
-- fetch the battle log,
-- process Ladder battles,
-- insert new records,
-- and analyze the requested number of recent battles.
+```text
+30 battles
+```
 
-The default is **30 battles**.
-
-## Analyze a different number of battles
+## Analyze a specific number of battles
 
 ```bash
 python3 analyser.py "#822JCG2YL" --last 15
 ```
 
-Valid values are:
+Valid values:
 
 ```text
 1–30
 ```
 
-## Analyze existing database data without calling the API
+## Analyze existing database data
 
 ```bash
 python3 analyser.py "#822JCG2YL" --no-fetch
 ```
 
-This is useful when:
-
-- the API is unavailable,
-- you want to avoid another API request,
-- or you want to analyze already collected battles.
+This does not make an API request.
 
 ---
 
 # Dashboard
 
-Start Streamlit with:
+Start Streamlit:
 
 ```bash
 streamlit run dashboard.py
 ```
 
-Then open the local Streamlit URL shown in the terminal.
-
-The dashboard automatically reads the SQLite database configured through:
+The dashboard reads the SQLite database configured by:
 
 ```env
 CR_SQLITE_DB=./clash_royale.db
 ```
 
-## Dashboard controls
-
-### Player
-
-Select one of the player tags present in the database.
-
-### Recent matches
-
-Choose how many recent battles to display.
-
-The dashboard orders battles using `chronology_id` for the selected player.
-
 ---
 
 # Database
 
-The project uses SQLite.
-
-The main table is:
+The project uses SQLite with a main table named:
 
 ```text
 battles
 ```
 
-Important fields include:
+Important fields:
 
 ```text
 battle_id
@@ -343,6 +348,8 @@ opponent_tag
 result
 player_deck_vector
 opponent_deck_vector
+player_deck_info
+opponent_deck_info
 LH_difference
 player_ADSI
 opponent_ADSI
@@ -357,17 +364,37 @@ player_trophies
 
 ### Battle identity
 
-The database uses:
+The current database uses:
 
 ```text
 (player_tag, opponent_tag)
 ```
 
-as the uniqueness constraint for stored battle records.
+as the uniqueness constraint.
 
-`battle_id` is the SQLite sequential row ID.
+`battle_id` is the SQLite row ID.
 
 `chronology_id` represents the chronological position of battles for a player.
+
+### Deck storage
+
+The database intentionally stores both:
+
+```text
+player_deck_vector
+opponent_deck_vector
+```
+
+and:
+
+```text
+player_deck_info
+opponent_deck_info
+```
+
+The vectors are normalized numerical representations used for metric calculations.
+
+The deck-info fields preserve API card order and Evolution/Hero metadata for later structural analysis.
 
 ---
 
@@ -383,54 +410,26 @@ Clash Royale API
  Ladder Filter
        │
        ▼
-Card Level Normalization
+ Deck Extraction
        │
-       ├──────────────┐
-       ▼              ▼
-     ADSI             LH
-       │              │
-       └──────┬───────┘
-              ▼
-          SQLite DB
-              │
-       ┌──────┴──────┐
-       ▼             ▼
-   CLI Analyzer   Streamlit
-                    Dashboard
+       ├───────────────┐
+       │               │
+       ▼               ▼
+Normalized         Deck Metadata
+Level Vectors      API Card Order
+       │               │
+       ├───────┐       │
+       ▼       ▼       │
+     ADSI      LH      │
+       │       │       │
+       └───┬───┴───────┘
+           ▼
+       SQLite DB
+           │
+      ┌────┴────┐
+      ▼         ▼
+    CLI      Dashboard
 ```
-
----
-
-# Example analyzer output
-
-A typical analysis contains:
-
-```text
-CLASH ROYALE ANALYSIS — Player Name (#PLAYER_TAG)
-========================================================================
-
-Battles analyzed: 30
-Wins:             20
-Losses:           10
-Win rate:         66.7%
-
-Latest Ladder battle
-  ADSI:            72.31
-  Trophies:        10234
-  Opponent tag:    #XXXXXXXX
-
-ADSI_difference statistics
-  Mean:            1.842
-  Median:          1.500
-
-LH statistics — last 10 Ladder matches
-  Mean:            2.763
-  Median:          2.500
-  Minimum:         -6.000
-  Maximum:         12.350
-```
-
-The exact values depend on the stored battle data.
 
 ---
 
@@ -444,19 +443,23 @@ Only battles where:
 gameMode.name == "Ladder"
 ```
 
-are processed.
+are stored.
 
-Other game modes are discarded.
+## Separate numerical and structural deck representations
 
-## No API data is required by the dashboard
+The numerical vectors are optimized for deterministic metric calculations.
 
-The dashboard operates entirely from SQLite. Once battles have been collected, the dashboard does not need to call the Clash Royale API.
+The deck-info structures preserve the original API order and Evolution/Hero information so future analysis can use card-slot structure without reconstructing it from sorted levels.
 
-## Configuration is externalized
+## Externalized configuration
 
-Secrets and machine-specific paths are not embedded in the source code.
+Secrets and machine-specific paths are kept outside the Python source code.
 
-Use `.env` for local configuration and keep it out of version control.
+Use `.env` locally and keep it out of version control.
+
+## Read-only dashboard
+
+The dashboard only reads the SQLite database. It does not modify stored battles.
 
 ---
 
@@ -464,45 +467,50 @@ Use `.env` for local configuration and keep it out of version control.
 
 Do **not** commit your real `.env` file.
 
-Add this to `.gitignore`:
+Add:
 
 ```gitignore
 .env
 .venv/
 __pycache__/
 *.pyc
+*.db
+*.db-wal
+*.db-shm
 ```
 
-The repository should contain:
+to `.gitignore` if the local database should remain private.
+
+Keep:
 
 ```text
 .env.example
 ```
 
-but not:
-
-```text
-.env
-```
-
-Your real API token should only exist in your local environment or another secure secret-management system.
+in the repository so other users know which configuration variables are required.
 
 ---
 
 # Troubleshooting
 
-## `CR_API_TOKEN environment variable is not set`
+## API token error
 
-Make sure `.env` exists in the directory from which the script is being run and contains:
+If you see:
+
+```text
+CR_API_TOKEN environment variable is not set.
+```
+
+make sure `.env` exists and contains:
 
 ```env
 CR_API_TOKEN=your_token_here
 ```
 
-Also make sure `python-dotenv` is installed:
+and install:
 
 ```bash
-pip install python-dotenv
+pip install -r requirements.txt
 ```
 
 ## Database not found
@@ -513,38 +521,27 @@ Check:
 CR_SQLITE_DB=./clash_royale.db
 ```
 
-or provide the full path:
+or specify an absolute path.
 
-```env
-CR_SQLITE_DB=/path/to/clash_royale.db
-```
+Both the analyzer and dashboard should use the same value if they are intended to share a database.
 
-The analyzer and dashboard must point to the same database if you want the dashboard to display the analyzer's collected data.
+## Existing database has an incompatible schema
 
-## Want to inspect existing data only?
-
-Use:
-
-```bash
-python3 analyser.py "#YOURTAG" --no-fetch
-```
-
-This prevents an API request and analyzes the existing SQLite data.
+The analyzer checks the existing `battles` table before creating the current schema. If the table is incompatible with the current schema, it archives the old table under a collision-free `battles_legacy...` name before creating the current table.
 
 ---
 
 # Limitations
 
-The current system is intentionally focused on the data and metrics implemented by the analyzer.
-
-In particular:
-
 - Only Ladder battles are stored.
-- The analysis window exposed by the CLI is 1–30 battles.
-- Deck vectors are stored as normalized, sorted level vectors rather than full card metadata.
-- The current database schema does not store card rarity separately.
+- The CLI analysis window is limited to 1–30 battles.
+- Numerical deck vectors are normalized and sorted for metric calculations.
+- Detailed deck information is separately preserved in API card order.
+- Evolution/Hero capability is determined from the API icon URLs.
+- `evolutionLevel` is not used.
+- Card rarity is used during normalization but is not stored as a separate database field.
 - The dashboard is read-only.
-- API availability and authentication depend on the configured Clash Royale API endpoint and token.
+- API availability and authentication depend on the configured API endpoint and token.
 
 ---
 
@@ -554,41 +551,24 @@ This project is licensed under the **Apache License 2.0**.
 
 See the [`LICENSE`](LICENSE) file for the complete license text.
 
-Copyright © 2026 Aashay Kadu
-
----
-
-# Author
-
-**Aashay Kadu**
-
-Built as a personal Clash Royale performance-analysis project using Python, SQLite, Pandas, Plotly, Streamlit, and the Clash Royale API.
-
-
----
-
-# Repository
-
-Source code:
-
-https://github.com/JournalKenobi11/clash_royale_analytics
+Copyright © 2026 Aashay Kadu.
 
 ---
 
 # Third-party software and services
 
-This project uses third-party software and services, each of which remains subject to its own license and terms:
+This project uses third-party software and services, each subject to its own license and terms:
 
-- **Python** — programming language/runtime
-- **Requests** — HTTP client
-- **python-dotenv** — environment-variable configuration
-- **Pandas** — data processing
-- **Plotly** — data visualization
-- **Streamlit** — dashboard framework
-- **SQLite** — database engine
-- **Clash Royale API / RoyaleAPI proxy** — external API service
+- Python
+- Requests
+- python-dotenv
+- Pandas
+- Plotly
+- Streamlit
+- SQLite
+- Clash Royale API / configured API proxy
 
-The Apache License 2.0 in this repository applies to the original source code of this project. It does not relicense third-party software, trademarks, game assets, or external services.
+The Apache License 2.0 applies to the original source code of this project. It does not relicense third-party software, trademarks, game assets, or external services.
 
 ## Clash Royale / Supercell
 
@@ -597,3 +577,13 @@ This is an independent, community-made analytics project.
 It is **not affiliated with, endorsed by, sponsored by, or officially connected to Supercell**.
 
 Clash Royale and Supercell are trademarks of their respective owners. Use of the Clash Royale API is subject to the applicable API/service terms.
+
+---
+
+# Repository
+
+https://github.com/JournalKenobi11/clash_royale_analytics
+
+# Author
+
+**Aashay Kadu**
