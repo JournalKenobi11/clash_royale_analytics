@@ -7,12 +7,12 @@ Usage:
     python3 analyser.py "#822JCG2YL" --last 15
     python3 analyser.py "#822JCG2YL" --no-fetch
 
-Required environment variable:
-    CR_API_TOKEN
+Configuration is loaded from a .env file in the working directory.
 
-Optional environment variables:
-    CR_API_BASE_URL   Defaults to https://proxy.royaleapi.dev/v1
-    CR_SQLITE_DB      Defaults to ./clash_royale.db
+Environment variables:
+    CR_API_TOKEN      Required Clash Royale API token
+    CR_API_BASE_URL   Optional; defaults to https://proxy.royaleapi.dev/v1
+    CR_SQLITE_DB      Optional; defaults to ./clash_royale.db
 
 Database identity:
     opponent_tag is the unique battle identifier within each player dataset.
@@ -60,6 +60,9 @@ import sys
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 RARITY_OFFSETS = {

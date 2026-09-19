@@ -1,11 +1,18 @@
+import os
 import sqlite3
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-DB_PATH = Path("/home/journalkenobi/clash_api_dump/clash_royale.db")
+# Configuration is loaded from .env via CR_SQLITE_DB.
+
+DB_PATH = Path(os.getenv("CR_SQLITE_DB", "./clash_royale.db")).expanduser()
 
 st.set_page_config(page_title="Clash Royale Analysis Dashboard", page_icon="CR", layout="wide")
 st.title("Clash Royale Analysis Dashboard")
