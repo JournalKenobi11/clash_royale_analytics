@@ -11,7 +11,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-import analyser
+import V2_analyser
 
 
 # ============================================================
@@ -59,7 +59,7 @@ if search_clicked:
         st.sidebar.error("Enter a player tag.")
     else:
         try:
-            result = analyser.analyse_player(search_tag.strip())
+            result = V2_analyser.analyse_player(search_tag.strip())
 
             st.session_state["searched_tag"] = result["tag"]
             st.session_state["search_result"] = result
