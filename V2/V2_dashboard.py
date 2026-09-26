@@ -10,6 +10,8 @@ load_dotenv()
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+if "CR_API_TOKEN" in st.secrets:
+    os.environ["CR_API_TOKEN"] = st.secrets["CR_API_TOKEN"]
 
 import V2_analyser
 
